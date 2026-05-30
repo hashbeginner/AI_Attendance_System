@@ -100,7 +100,17 @@ Used for numerical operations and attendance record management.
    * The image is stored for future review.
 
 ---
+## 📸 Screenshots
 
+### 🏠 Main Dashboard
+![Dashboard](assets/Dashboard.png)
+
+### 📤 Image Upload Recognition
+![Upload](assets/Upload.png)
+
+###  Admin's Dashboard
+![Admin](assets/Admin.png)
+---
 ## Project Structure
 
 AI_Attendance_System/
