@@ -1,0 +1,11 @@
+*.faiss
+*.pkl
+archive.zip
+uploads/
+archive/
+*.mp4
+*.avi
+*.mov
+__pycache__/
+*.pyc
+unknown_faces/
