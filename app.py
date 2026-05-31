@@ -27,17 +27,9 @@ ATTENDANCE_FILE = ROOT / "attendance.csv"
 INDEX_FILE = ROOT / "face_index.faiss"
 LABELS_FILE = ROOT / "labels.pkl"
 
-ARCHIVE_ZIP = ROOT / "archive.zip"
+
 UNKNOWN_DIR = ROOT / "unknown_faces"
 UNKNOWN_DIR.mkdir(exist_ok=True)
-# =========================
-# EXTRACT DATASET
-# =========================
-
-if ARCHIVE_ZIP.exists() and not (ROOT / "archive").exists():
-
-    with zipfile.ZipFile(ARCHIVE_ZIP, "r") as zip_ref:
-        zip_ref.extractall(ROOT)
 
 # =========================
 # STREAMLIT
