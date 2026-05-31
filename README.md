@@ -111,6 +111,9 @@ Used for numerical operations and attendance record management.
 ###  Admin's Dashboard
 ![Admin](assets/Admin.png)
 ---
+## Web Application
+[Live Demo](https://huggingface.co/spaces/gracemend/Attendance_System)
+---
 ## Project Structure
 
 AI_Attendance_System/
