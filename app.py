@@ -198,7 +198,6 @@ def save_unknown_face(img_path: Path):
 # =========================
 # RECOGNITION
 # =========================
-
 def recognize_face(img_path):
 
     if index is None or len(labels) == 0:
@@ -218,18 +217,18 @@ def recognize_face(img_path):
 
     best_idx = int(indices[0][0])
 
-    # VERY IMPORTANT
     VALID_THRESHOLD = 0.55
 
     if similarity < VALID_THRESHOLD:
+
         save_unknown_face(img_path)
+
         return "Unknown"
 
     if best_idx < 0 or best_idx >= len(labels):
         return "Unknown"
 
     return labels[best_idx], similarity
-
 # =========================
 # UI
 # =========================
@@ -283,27 +282,36 @@ with tab1:
             st.success(f"✅ {name}")
             st.info(f"Similarity: {score:.3f}")
 
+            mark_attendance(name, "Upload")
+
         else:
 
             name = result
 
             if name == "Unknown":
+
                 st.error("❌ Unknown Human")
 
+                st.success(
+                    "Unknown face stored successfully."
+                )
+
+                mark_attendance(
+                    "Unknown_Human",
+                    "Upload"
+                )
+
             elif name == "No face detected":
+
                 st.warning("⚠ No face detected")
 
             elif name == "Blurry Image":
+
                 st.warning("⚠ Blurry Image")
 
             else:
+
                 st.error(name)
-
-        if name == "Unknown":
-            mark_attendance("Unknown_Human", "Upload")
-        else:
-            mark_attendance(name, "Upload")
-
 # =========================
 # WEBCAM
 # =========================
@@ -344,7 +352,7 @@ with tab2:
 # =========================
 # VIDEO
 # =========================
-# ==================== VIDEO ====================
+
 
 with tab3:
 
@@ -550,7 +558,36 @@ with tab5:
         st.bar_chart(source_counts)
 
     st.markdown("---")
+    # ============= UNKNOWN FACE GALLERY ============
+    st.markdown("---")
+    st.subheader("🕵️ Unknown Face Gallery")
 
+    unknown_files = list(
+        UNKNOWN_DIR.glob("*.jpg")
+    )
+
+    st.metric(
+        "Stored Unknown Faces",
+        len(unknown_files)
+    )
+
+
+    show_gallery = st.checkbox(
+        "Show Unkown Face Gallery"
+    )
+
+
+    if show_gallery:
+        cols = st.columns(4)
+
+        for i, file in enumerate(unknown_files):
+
+            with cols[i % 4]:
+                st.image(
+                    str(file),
+                    use_container_width=True
+                )
+   
     # ================= CSV DOWNLOAD =================
 
     st.subheader("⬇️ Export Records")
