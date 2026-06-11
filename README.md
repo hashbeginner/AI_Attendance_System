@@ -142,12 +142,10 @@ AI_Attendance_System/
 
 ## Future Improvements
 
-* Multi-face attendance tracking
 * Real-time CCTV integration
 * Liveness detection to prevent spoofing
 * Cloud database integration
 * User authentication and role-based access
-* Attendance reports and analytics dashboard
 
 ---
 
