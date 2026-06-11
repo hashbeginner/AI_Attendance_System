@@ -5,7 +5,6 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 import cv2
 import faiss
 import pickle
-import zipfile
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -18,27 +17,22 @@ from deepface import DeepFace
 # PATHS
 # =========================
 
-ROOT = Path.cwd()
-
+ROOT        = Path.cwd()
 UPLOADS_DIR = ROOT / "uploads"
 
 ATTENDANCE_FILE = ROOT / "attendance.csv"
-
-INDEX_FILE = ROOT / "face_index.faiss"
-LABELS_FILE = ROOT / "labels.pkl"
-
+INDEX_FILE      = ROOT / "face_index.faiss"
+LABELS_FILE     = ROOT / "labels.pkl"
+UNKNOWN_LOG     = ROOT / "unknown_log.csv"
 
 UNKNOWN_DIR = ROOT / "unknown_faces"
 UNKNOWN_DIR.mkdir(exist_ok=True)
 
 # =========================
-# STREAMLIT
+# STREAMLIT CONFIG
 # =========================
 
-st.set_page_config(
-    page_title="AI Attendance System",
-    layout="wide"
-)
+st.set_page_config(page_title="AI Attendance System", layout="wide")
 
 # =========================
 # LOAD INDEX
@@ -46,23 +40,18 @@ st.set_page_config(
 
 @st.cache_resource
 def load_index():
-
     if not INDEX_FILE.exists():
         return None
-
     return faiss.read_index(str(INDEX_FILE))
-
 
 @st.cache_data
 def load_labels():
-
     if not LABELS_FILE.exists():
         return []
-
     with open(LABELS_FILE, "rb") as f:
         return pickle.load(f)
 
-index = load_index()
+index  = load_index()
 labels = load_labels()
 
 # =========================
@@ -72,13 +61,13 @@ labels = load_labels()
 UPLOADS_DIR.mkdir(exist_ok=True)
 
 if not ATTENDANCE_FILE.exists():
+    pd.DataFrame(columns=["Name", "Time", "Source"]).to_csv(ATTENDANCE_FILE, index=False)
 
-    pd.DataFrame(
-        columns=["Name", "Time", "Source"]
-    ).to_csv(ATTENDANCE_FILE, index=False)
+if not UNKNOWN_LOG.exists():
+    pd.DataFrame(columns=["Filename", "Timestamp"]).to_csv(UNKNOWN_LOG, index=False)
 
 # =========================
-# ATTENDANCE
+# HELPERS
 # =========================
 
 def load_attendance():
@@ -86,53 +75,61 @@ def load_attendance():
 
 
 def mark_attendance(name, source):
-
-    if name in [
-        "Unknown",
-        "No face detected",
-        "Blurry Image",
-        "Model files missing"
-    ]:
+    if name in ["Unknown", "Unknown_Human", "No face detected", "Blurry Image", "Model files missing"]:
         return
-
     df = load_attendance()
-
-    df.loc[len(df)] = [
-        name,
-        datetime.now().strftime("%H:%M:%S"),
-        source
-    ]
-
+    df.loc[len(df)] = [name, datetime.now().strftime("%H:%M:%S"), source]
     df.to_csv(ATTENDANCE_FILE, index=False)
 
-# =========================
-# BLUR DETECTION
-# =========================
 
 def is_blurry(img_path):
-
     img = cv2.imread(str(img_path))
-
     if img is None:
         return True
-
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    score = cv2.Laplacian(
-        gray,
-        cv2.CV_64F
-    ).var()
-
+    gray  = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    score = cv2.Laplacian(gray, cv2.CV_64F).var()
     return score < 100
+
+
+def resize_image(img_path, max_width=800):
+    img = cv2.imread(str(img_path))
+    if img is None:
+        return
+    h, w = img.shape[:2]
+    if w <= max_width:
+        return
+    scale = max_width / w
+    resized = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    cv2.imwrite(str(img_path), resized)
+
+
+def save_unknown_face(img_path: Path):
+    try:
+        img = cv2.imread(str(img_path))
+        if img is None:
+            return
+        faces = DeepFace.extract_faces(
+            img_path=str(img_path),
+            detector_backend="opencv",
+            enforce_detection=True
+        )
+        for i, face in enumerate(faces):
+            fa       = face["facial_area"]
+            cropped  = img[fa["y"]:fa["y"]+fa["h"], fa["x"]:fa["x"]+fa["w"]]
+            filename = f"unknown_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{i}.jpg"
+            cv2.imwrite(str(UNKNOWN_DIR / filename), cropped)
+            pd.DataFrame([[filename, datetime.now()]]).to_csv(
+                UNKNOWN_LOG, mode="a", header=False, index=False
+            )
+    except Exception as e:
+        print("Unknown save error:", e)
 
 # =========================
 # EMBEDDING
 # =========================
 
 def get_embedding(img_path):
-
     try:
-
         result = DeepFace.represent(
             img_path=str(img_path),
             model_name="ArcFace",
@@ -140,97 +137,121 @@ def get_embedding(img_path):
             enforce_detection=True,
             align=True
         )
-
         if not result:
             return None
-
-        embedding = result[0]["embedding"]
-
-        vector = np.array(
-            embedding,
-            dtype="float32"
-        ).reshape(1, -1)
-
+        vector = np.array(result[0]["embedding"], dtype="float32").reshape(1, -1)
         faiss.normalize_L2(vector)
-
         return vector
-
     except:
         return None
-    
-# =========================
-# SAVE FUNCTION
-# =========================
-def save_unknown_face(img_path: Path):
-
-    try:
-        img = cv2.imread(str(img_path))
-
-        if img is None:
-            return
-
-        faces = DeepFace.extract_faces(
-            img_path=str(img_path),
-            detector_backend="opencv",
-            enforce_detection=True
-        )
-
-        for i, face in enumerate(faces):
-
-            facial_area = face["facial_area"]
-
-            x = facial_area["x"]
-            y = facial_area["y"]
-            w = facial_area["w"]
-            h = facial_area["h"]
-
-            cropped = img[y:y+h, x:x+w]
-
-            filename = f"unknown_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{i}.jpg"
-
-            save_path = UNKNOWN_DIR / filename
-
-            cv2.imwrite(str(save_path), cropped)
-
-    except Exception as e:
-        print("Unknown save error:", e)
 
 # =========================
-# RECOGNITION
+# SINGLE FACE RECOGNITION  (webcam)
 # =========================
+
 def recognize_face(img_path):
-
     if index is None or len(labels) == 0:
         return "Model files missing"
-
     if is_blurry(img_path):
         return "Blurry Image"
-
     query = get_embedding(img_path)
-
     if query is None:
         return "No face detected"
-
     scores, indices = index.search(query, 1)
-
     similarity = float(scores[0][0])
-
-    best_idx = int(indices[0][0])
-
-    VALID_THRESHOLD = 0.55
-
-    if similarity < VALID_THRESHOLD:
-
+    best_idx   = int(indices[0][0])
+    if similarity < 0.55:
         save_unknown_face(img_path)
-
         return "Unknown"
-
     if best_idx < 0 or best_idx >= len(labels):
         return "Unknown"
-
     return labels[best_idx], similarity
+
 # =========================
-# UI
+# MULTI-FACE RECOGNITION  (upload)
+# =========================
+
+def extract_faces_with_fallback(img_path):
+    """Try retinaface → mtcnn → opencv. Return (faces, backend) or ([], None)."""
+    for backend in ["retinaface", "mtcnn", "opencv"]:
+        try:
+            faces = DeepFace.extract_faces(
+                img_path=str(img_path),
+                detector_backend=backend,
+                enforce_detection=True,
+                align=True
+            )
+            if faces:
+                return faces, backend
+        except Exception:
+            continue
+    return [], None
+
+
+def recognize_multiple_faces(img_path):
+    """
+    Returns:
+        results      : list of (name: str, facial_area: dict, similarity: float)
+        annotated_img: BGR numpy array with boxes/labels drawn, or None
+    """
+    if index is None or len(labels) == 0:
+        return [], None
+
+    img = cv2.imread(str(img_path))
+    if img is None:
+        return [], None
+
+    faces, backend_used = extract_faces_with_fallback(img_path)
+    if not faces:
+        return [], None
+
+    VALID_THRESHOLD = 0.55
+    results = []
+
+    for face_idx, face in enumerate(faces):
+        label = f"Face {face_idx + 1}"
+        try:
+            rep = DeepFace.represent(
+                img_path=face["face"],
+                model_name="ArcFace",
+                detector_backend="skip",
+                enforce_detection=False,
+                align=True
+            )
+            if not rep:
+                results.append(("Unknown", face.get("facial_area", {}), 0.0))
+                continue
+
+            vector = np.array(rep[0]["embedding"], dtype="float32").reshape(1, -1)
+            faiss.normalize_L2(vector)
+
+            scores, indices = index.search(vector, 1)
+            similarity = float(scores[0][0])
+            best_idx   = int(indices[0][0])
+
+            if similarity < VALID_THRESHOLD or best_idx < 0 or best_idx >= len(labels):
+                results.append(("Unknown", face.get("facial_area", {}), similarity))
+            else:
+                results.append((labels[best_idx], face.get("facial_area", {}), similarity))
+
+        except Exception as e:
+            results.append(("Unknown", face.get("facial_area", {}), 0.0))
+
+    # Draw bounding boxes on a copy
+    annotated = img.copy()
+    for name, fa, sim in results:
+        if not fa:
+            continue
+        x, y, w, h = fa.get("x",0), fa.get("y",0), fa.get("w",0), fa.get("h",0)
+        color = (0, 255, 0) if name != "Unknown" else (0, 0, 255)
+        cv2.rectangle(annotated, (x, y), (x+w, y+h), color, 2)
+        text = f"{name} ({sim:.2f})" if name != "Unknown" else "Unknown"
+        cv2.putText(annotated, text, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+    return results, annotated
+
+# =========================
+# UI HEADER
 # =========================
 
 st.markdown(
@@ -244,76 +265,89 @@ st.markdown(
 )
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📤 Upload",
-    "📷 Webcam",
-    "🎥 Video",
-    "📋 Records",
-    "📊 Dashboard"
+    "📤 Upload", "📷 Webcam", "🎥 Video", "📋 Records", "📊 Dashboard"
 ])
 
 # =========================
-# IMAGE UPLOAD
+# TAB 1 — UPLOAD
 # =========================
 
 with tab1:
 
-    uploaded_file = st.file_uploader(
-        "Upload Image",
-        type=["jpg", "jpeg", "png"]
+    uploaded_files = st.file_uploader(
+        "Upload Image(s)",
+        type=["jpg", "jpeg", "png"],
+        accept_multiple_files=True
     )
 
-    if uploaded_file:
+    if uploaded_files:
 
-        path = UPLOADS_DIR / uploaded_file.name
+        for uploaded_file in uploaded_files:
 
-        with open(path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
+            path = UPLOADS_DIR / uploaded_file.name
 
-        st.image(str(path))
+            with open(path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
 
-        with st.spinner("Analyzing..."):
+            resize_image(path)
 
-            result = recognize_face(path)
+            st.markdown(f"**📁 {uploaded_file.name}**")
 
-        if isinstance(result, tuple):
+            # Reserve all slots BEFORE the spinner runs so layout
+            # does not shift when results arrive (prevents shaking)
+            img_slot     = st.empty()
+            status_slot  = st.empty()
+            results_slot = st.empty()
 
-            name, score = result
+            # Show resized raw image immediately into reserved slot
+            img_slot.image(str(path), width=700)
 
-            st.success(f"✅ {name}")
-            st.info(f"Similarity: {score:.3f}")
+            with st.spinner("Analyzing faces..."):
+                results, annotated_img = recognize_multiple_faces(path)
 
-            mark_attendance(name, "Upload")
+            if not results:
+                status_slot.warning("⚠ No faces detected or model files missing.")
+                st.markdown("---")
+                continue
 
-        else:
-
-            name = result
-
-            if name == "Unknown":
-
-                st.error("❌ Unknown Human")
-
-                st.success(
-                    "Unknown face stored successfully."
+            # Replace raw image with annotated version in the same slot
+            # width=700 matches resize_image max_width so no layout jump
+            if annotated_img is not None:
+                img_slot.image(
+                    cv2.cvtColor(annotated_img, cv2.COLOR_BGR2RGB),
+                    caption=f"Detected faces — {len(results)} found",
+                    width=700
                 )
 
-                mark_attendance(
-                    "Unknown_Human",
-                    "Upload"
-                )
+            # Write all result text into the pre-reserved slot
+            with results_slot.container():
+                st.markdown("**Detected People:**")
+                unknown_found = False
+                unique_known  = set()
 
-            elif name == "No face detected":
+                for name, fa, sim in results:
+                    if name == "Unknown":
+                        unknown_found = True
+                        st.error("❌ Unknown Human")
+                    else:
+                        unique_known.add(name)
+                        st.success(f"✅ {name}  —  similarity: `{sim:.3f}`")
 
-                st.warning("⚠ No face detected")
+            status_slot.empty()  # clear the reserved status slot
 
-            elif name == "Blurry Image":
+            # Attendance + unknown logging
+            if unknown_found:
+                save_unknown_face(path)
+                mark_attendance("Unknown_Human", "Upload")
+                st.info("Unknown face stored.")
 
-                st.warning("⚠ Blurry Image")
+            for name in unique_known:
+                mark_attendance(name, "Upload")
 
-            else:
+            st.markdown("---")
 
-                st.error(name)
 # =========================
-# WEBCAM
+# TAB 2 — WEBCAM
 # =========================
 
 with tab2:
@@ -323,189 +357,192 @@ with tab2:
     if cam:
 
         path = UPLOADS_DIR / "webcam.jpg"
-
         with open(path, "wb") as f:
             f.write(cam.getbuffer())
 
-        st.image(str(path))
+        resize_image(path)
 
         result = recognize_face(path)
 
         if isinstance(result, tuple):
-
             name, score = result
-
             st.success(f"✅ {name}")
             st.info(f"Similarity: {score:.3f}")
-
-        else:
-
-            name = result
-
-            st.warning(name)
-
-        if name == "Unknown":
-            mark_attendance("Unknown_Human", "Webcam")
-        else:
             mark_attendance(name, "Webcam")
+        else:
+            name = result
+            st.warning(name)
+            if name == "Unknown":
+                mark_attendance("Unknown_Human", "Webcam")
 
 # =========================
-# VIDEO
+# TAB 3 — VIDEO
 # =========================
-
 
 with tab3:
 
     st.subheader("🎥 Video Attendance System")
 
-    video = st.file_uploader(
-        "Upload Video",
-        type=["mp4", "avi", "mov"]
-    )
+    video = st.file_uploader("Upload Video", type=["mp4", "avi", "mov"])
 
     if video:
 
         video_path = UPLOADS_DIR / video.name
-
         with open(video_path, "wb") as f:
             f.write(video.getbuffer())
 
         st.video(str(video_path))
-
         st.info("⏳ Processing video...")
 
         cap = cv2.VideoCapture(str(video_path))
 
-        recognized = set()
+        recognized            = set()
+        frame_count           = 0
+        frames_scanned        = 0
+        total_face_detections = 0
+        unknown_face_count    = 0
+        person_first_seen     = {}
+        face_counts_per_frame = []
 
-        frame_count = 0
-
-        # ================= SPEED OPTIMIZATION =================
-        frame_skip = 30   # process 1 frame every 30 frames
+        frame_skip   = 30
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps          = cap.get(cv2.CAP_PROP_FPS) or 30
 
         progress_bar = st.progress(0)
-
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        status_text  = st.empty()
 
         while cap.isOpened():
 
             ret, frame = cap.read()
-
             if not ret:
                 break
 
             frame_count += 1
 
-            # ================= UPDATE PROGRESS =================
             if total_frames > 0:
-                progress = min(frame_count / total_frames, 1.0)
-                progress_bar.progress(progress)
+                progress_bar.progress(min(frame_count / total_frames, 1.0))
+                status_text.text(
+                    f"Frame {frame_count}/{total_frames}  |  "
+                    f"Scanned: {frames_scanned}  |  Known: {len(recognized)}"
+                )
 
-            # ================= SKIP FRAMES =================
             if frame_count % frame_skip != 0:
                 continue
 
-            # ================= RESIZE FOR SPEED =================
-            frame = cv2.resize(frame, (320, 240))
+            frames_scanned += 1
+            frame_resized   = cv2.resize(frame, (320, 240))
 
             try:
-
-                # ================= FACE DETECTION =================
                 faces = DeepFace.extract_faces(
-                    img_path=frame,
+                    img_path=frame_resized,
                     detector_backend="opencv",
                     enforce_detection=True
                 )
+                faces_in_frame         = len(faces)
+                total_face_detections += faces_in_frame
+                face_counts_per_frame.append((frame_count, faces_in_frame))
 
-                # ================= PROCESS EACH FACE =================
                 for face in faces:
-
                     try:
-
-                        face_img = face["face"]
-
-                        # Convert face to embedding
-                        result = DeepFace.represent(
-                            img_path=face_img,
+                        rep = DeepFace.represent(
+                            img_path=face["face"],
                             model_name="ArcFace",
                             detector_backend="skip",
                             enforce_detection=False
                         )
-
-                        if not result:
+                        if not rep:
+                            unknown_face_count += 1
                             continue
 
-                        embedding = result[0]["embedding"]
-
-                        vector = np.array(
-                            embedding,
-                            dtype="float32"
-                        ).reshape(1, -1)
-
+                        vector = np.array(rep[0]["embedding"], dtype="float32").reshape(1, -1)
                         faiss.normalize_L2(vector)
 
-                        # ================= SEARCH =================
                         scores, indices = index.search(vector, 1)
-
                         similarity = float(scores[0][0])
+                        best_idx   = int(indices[0][0])
 
-                        best_idx = int(indices[0][0])
-
-                        VALID_THRESHOLD = 0.55
-
-                        # ================= UNKNOWN =================
-                        if similarity < VALID_THRESHOLD:
-                            continue
-
-                        if best_idx < 0 or best_idx >= len(labels):
+                        if similarity < 0.55 or best_idx < 0 or best_idx >= len(labels):
+                            unknown_face_count += 1
                             continue
 
                         name = labels[best_idx]
 
-                        # ================= DUPLICATE PREVENTION =================
-                        if name in recognized:
-                            continue
+                        if name not in person_first_seen:
+                            person_first_seen[name] = frame_count
 
-                        recognized.add(name)
-
-                        mark_attendance(name, "Video")
+                        if name not in recognized:
+                            recognized.add(name)
+                            mark_attendance(name, "Video")
 
                     except Exception:
-                        continue
+                        unknown_face_count += 1
 
             except Exception:
-                continue
+                face_counts_per_frame.append((frame_count, 0))
 
         cap.release()
-
         progress_bar.empty()
+        status_text.empty()
 
         st.success("✅ Video Processing Complete")
 
-        # ================= RESULTS =================
-        if len(recognized) == 0:
+        # Analytics
+        st.subheader("📊 Video Analytics")
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Total Frames",       frame_count)
+        m2.metric("Frames Scanned",     frames_scanned)
+        m3.metric("Face Detections",    total_face_detections)
+        m4.metric("Known People",       len(recognized))
+        m5.metric("Unknown Detections", unknown_face_count)
 
+        st.markdown("---")
+
+        if face_counts_per_frame:
+            st.subheader("📈 Face Activity Over Video")
+            st.line_chart(
+                pd.DataFrame(face_counts_per_frame, columns=["Frame", "Faces Detected"]).set_index("Frame")
+            )
+
+        st.markdown("---")
+
+        st.subheader("👥 Known vs Unknown Breakdown")
+        st.bar_chart(
+            pd.DataFrame({
+                "Category": ["Known", "Unknown"],
+                "Count":    [len(recognized), unknown_face_count]
+            }).set_index("Category")
+        )
+
+        st.markdown("---")
+
+        if person_first_seen:
+            st.subheader("🕐 First Appearance in Video")
+            rows = []
+            for person, frame_no in sorted(person_first_seen.items(), key=lambda x: x[1]):
+                sec = round(frame_no / fps, 1)
+                rows.append({"Name": person, "Frame": frame_no,
+                              "Timestamp": f"{int(sec//60):02d}:{int(sec%60):02d}"})
+            st.dataframe(pd.DataFrame(rows), use_container_width=True)
+
+        st.markdown("---")
+
+        if recognized:
+            st.subheader("✅ Recognized People")
+            for person in sorted(recognized):
+                st.success(f"✅ {person}")
+        else:
             st.warning("⚠️ No known faces detected")
 
-        else:
-
-            st.subheader("👥 Recognized People")
-
-            for person in recognized:
-                st.success(f"✅ {person}")
 # =========================
-# RECORDS
+# TAB 4 — RECORDS
 # =========================
 
 with tab4:
-
     st.dataframe(load_attendance())
 
 # =========================
-# DASHBOARD
+# TAB 5 — DASHBOARD
 # =========================
-
-# ==================== DASHBOARD ====================
 
 with tab5:
 
@@ -514,84 +551,60 @@ with tab5:
     st.subheader("📊 Admin Dashboard")
 
     col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.metric("Total Records", len(df))
-
-    with col2:
-        unique_people = df["Name"].nunique() if len(df) > 0 else 0
-        st.metric("Unique People", unique_people)
-
-    with col3:
-
-        unknown_count = 0
-
-        if len(df) > 0:
-            unknown_count = len(
-                df[df["Name"] == "Unknown_Human"]
-            )
-
-        st.metric("Unknown Humans", unknown_count)
+    col1.metric("Total Records",  len(df))
+    col2.metric("Unique People",  df["Name"].nunique() if len(df) > 0 else 0)
+    col3.metric("Unknown Humans", len(df[df["Name"] == "Unknown_Human"]) if len(df) > 0 else 0)
 
     st.markdown("---")
 
-    # ================= TOP ATTENDEES =================
-
     if len(df) > 0:
-
         st.subheader("👥 Top Attendees")
-
-        top_people = df["Name"].value_counts().head(10)
-
-        st.bar_chart(top_people)
+        st.bar_chart(df["Name"].value_counts().head(10))
 
     st.markdown("---")
-
-    # ================= SOURCE ANALYTICS =================
 
     if len(df) > 0:
-
         st.subheader("📂 Attendance Source Breakdown")
-
-        source_counts = df["Source"].value_counts()
-
-        st.bar_chart(source_counts)
+        st.bar_chart(df["Source"].value_counts())
 
     st.markdown("---")
-    # ============= UNKNOWN FACE GALLERY ============
+
+    # Unknown Face Log
+    st.subheader("📄 Unknown Face Log")
+    try:
+        ulog = pd.read_csv(UNKNOWN_LOG, header=0)
+        if not ulog.empty:
+            st.dataframe(ulog)
+        else:
+            st.info("No unknown faces logged yet.")
+    except Exception:
+        st.info("No unknown faces logged yet.")
+
     st.markdown("---")
+
+    # Unknown Face Gallery
     st.subheader("🕵️ Unknown Face Gallery")
+    unknown_files = sorted(
+        UNKNOWN_DIR.glob("*.jpg"),
+        key=lambda x: x.stat().st_mtime,
+        reverse=True
+    )[:10]
 
-    unknown_files = list(
-        UNKNOWN_DIR.glob("*.jpg")
-    )
+    st.metric("Stored Unknown Faces", len(list(UNKNOWN_DIR.glob("*.jpg"))))
 
-    st.metric(
-        "Stored Unknown Faces",
-        len(unknown_files)
-    )
+    with st.expander("Show Unknown Face Gallery"):
+        if unknown_files:
+            cols = st.columns(4)
+            for i, file in enumerate(unknown_files):
+                with cols[i % 4]:
+                    st.image(str(file), use_container_width=True)
+        else:
+            st.info("No unknown faces stored yet.")
 
+    st.markdown("---")
 
-    show_gallery = st.checkbox(
-        "Show Unkown Face Gallery"
-    )
-
-
-    if show_gallery:
-        cols = st.columns(4)
-
-        for i, file in enumerate(unknown_files):
-
-            with cols[i % 4]:
-                st.image(
-                    str(file),
-                    use_container_width=True
-                )
-   
-    # ================= CSV DOWNLOAD =================
-
+    # Export
     st.subheader("⬇️ Export Records")
-
     st.download_button(
         label="Download Attendance CSV",
         data=df.to_csv(index=False).encode("utf-8"),
@@ -601,18 +614,9 @@ with tab5:
 
     st.markdown("---")
 
-    # ================= CLEAR BUTTON =================
-
+    # Admin controls
     st.subheader("🧹 Admin Controls")
-
     if st.button("Clear Attendance Records"):
-
-        empty_df = pd.DataFrame(
-            columns=["Name", "Time", "Source"]
-        )
-
-        empty_df.to_csv(ATTENDANCE_FILE, index=False)
-
+        pd.DataFrame(columns=["Name", "Time", "Source"]).to_csv(ATTENDANCE_FILE, index=False)
         st.success("Attendance records cleared.")
-
         st.rerun()
